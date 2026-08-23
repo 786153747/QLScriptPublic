@@ -26,6 +26,10 @@ from pathlib import Path
 
 import requests
 
+from yyb_helper import bootstrap_yyb_script, get_wx_code as yyb_get_wx_code
+
+bootstrap_yyb_script()
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -126,33 +130,7 @@ def remove_cached_session(openid):
 # smallcat: openid -> wx.login code
 # ---------------------------------------------------------------------------
 def get_wx_code(openid):
-    if not WX_AUTH:
-        raise RuntimeError("缺少 wx_auth, 无法从 wx_server 获取 code")
-    headers = {"Accept": "application/json", "Content-Type": "application/json",
-               "auth": WX_AUTH}
-    body = json.dumps({"appid": MINI_APP_ID, "openid": openid})
-    last_msg = ""
-    for attempt in range(4):
-        if attempt:
-            # smallcat 偶发 "获取失败"(会话抖动), 刷新会话后间隔重试
-            try:
-                session.post(f"{WX_SERVER_URL}/wx/refresh", data=body,
-                             headers=headers, timeout=30)
-            except Exception:
-                pass
-            time.sleep(3)
-        resp = session.post(f"{WX_SERVER_URL}/wx/code", data=body,
-                            headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and data.get("status") is False:
-            last_msg = data.get("message") or "获取失败"
-            continue
-        code = data.get("code") or (data.get("data") or {}).get("code")
-        if code:
-            return code
-        last_msg = "wx_server 未返回 code"
-    raise RuntimeError(f"wx_server 获取 code 失败(已重试): {last_msg}")
+    return yyb_get_wx_code(session, openid, MINI_APP_ID, timeout=30)
 
 
 # ---------------------------------------------------------------------------

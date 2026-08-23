@@ -11,16 +11,16 @@ import os
 import urllib3
 import requests
 
+from yyb_helper import bootstrap_yyb_script, get_wx_code
+
+bootstrap_yyb_script()
+
 urllib3.disable_warnings()
 
 
-# ── 账号 & 鉴权 ──
+# ── 账号 ──
 APPID = "wxdb3c0e388702f785"
 OPENID = os.environ.get("wxtxopenids", "")  # 多个账号用 & 分隔
-APIKEY = os.environ.get("wx_auth", "")  
-
-# ── 桥接服务 ──
-BRIDGE_BASE_URL = os.environ.get("wx_server_url", "")  # 调用时自动拼接 /wx/code
 BRIDGE_TIMEOUT = 40
 
 # ── 领券策略 ──
@@ -46,25 +46,12 @@ USER_AGENT = (
 class ClaimError(RuntimeError):
     pass
 
+
 def getjscode(openid: str) -> list[str]:
-    url = f"{BRIDGE_BASE_URL}/wx/code"
-    params = {"userKey": openid, "openid": openid, "appid": APPID}
     try:
-        resp = requests.post(url=url, json=params, headers={"auth": APIKEY}, timeout=BRIDGE_TIMEOUT, verify=False)
-    except requests.RequestException as err:
+        return [get_wx_code(requests.Session(), openid, APPID, timeout=BRIDGE_TIMEOUT)]
+    except Exception as err:
         raise ClaimError(f"桥接服务请求失败：{err}") from err
-
-    if resp.status_code != 200:
-        raise ClaimError(f"桥接服务返回 HTTP {resp.status_code}：{resp.text}")
-
-    data = resp.json()
-    if not data.get("status"):
-        raise ClaimError(f"桥接服务返回失败：{data}")
-
-    code = data.get("data", {}).get("code")
-    if not code:
-        raise ClaimError(f"桥接服务未返回 code：{data}")
-    return [code]
 
 def main() -> int:
     try:

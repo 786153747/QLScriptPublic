@@ -14,6 +14,10 @@ import sys
 import time
 from pathlib import Path
 
+from yyb_helper import bootstrap_yyb_script, get_wx_code as yyb_get_wx_code
+
+bootstrap_yyb_script()
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -89,20 +93,7 @@ def breo_task_headers(token):
     }
 
 def get_wx_code(account_id):
-    if not WX_AUTH:
-        raise RuntimeError("缺少wx_auth，无法从wx_server获取code")
-    resp = session.post(
-        f"{WX_SERVER_URL}/wx/code",
-        json={"appid": MINI_APP_ID, "openid": account_id},
-        headers=wx_headers(),
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    code = data.get("code") or (data.get("data") or {}).get("code")
-    if not code:
-        raise RuntimeError(f"wx_server未返回code: {data}")
-    return code
+    return yyb_get_wx_code(session, account_id, MINI_APP_ID, timeout=30)
 
 def login_with_code(account_id):
     code = get_wx_code(account_id)

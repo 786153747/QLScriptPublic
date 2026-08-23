@@ -76,6 +76,14 @@ from pathlib import Path
 
 import requests
 
+from yyb_helper import (
+    bootstrap_yyb_script,
+    get_encrypt_key as yyb_get_encrypt_key,
+    get_wx_code as yyb_get_wx_code,
+)
+
+bootstrap_yyb_script()
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -184,34 +192,21 @@ def write_token_cache(cache):
 # smallcat
 # ---------------------------------------------------------------------------
 def smallcat(endpoint, account_id):
-    if not WX_AUTH:
-        raise RuntimeError("缺少 wx_auth, 无法调用 wx_server")
-    headers = {"Accept": "application/json", "Content-Type": "application/json", "auth": WX_AUTH}
-    body = json.dumps({"appid": MINI_APP_ID, "openid": account_id})
-    resp = session.post(f"{WX_SERVER_URL}{endpoint}", data=body, headers=headers, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
+    if endpoint == "/wx/code":
+        return {"code": 0, "data": {"result": {"code": yyb_get_wx_code(session, account_id, MINI_APP_ID, timeout=60)}}}
+    if endpoint == "/wx/encryptkey":
+        return {
+            "code": 0,
+            "data": yyb_get_encrypt_key(session, account_id, MINI_APP_ID, timeout=60),
+        }
+    raise RuntimeError(f"不支持的桥接接口: {endpoint}")
 
 
 def get_code(account_id, endpoint="/wx/code"):
     """smallcat 偶发 "获取失败"(运行时会话抖动), 刷新会话后间隔重试。"""
-    last_msg = ""
-    for attempt in range(4):
-        if attempt:
-            try:
-                smallcat("/wx/refresh", account_id)
-            except Exception:
-                pass
-            time.sleep(3)
-        data = smallcat(endpoint, account_id)
-        if isinstance(data, dict) and data.get("status") is False:
-            last_msg = data.get("message") or "获取失败"
-            continue
-        code = data.get("code") or (data.get("data") or {}).get("code")
-        if code:
-            return code
-        last_msg = "wx_server 未返回 code"
-    raise RuntimeError(f"wx_server {endpoint} 失败(已重试): {last_msg}")
+    if endpoint != "/wx/code":
+        raise RuntimeError(f"不支持的桥接接口: {endpoint}")
+    return yyb_get_wx_code(session, account_id, MINI_APP_ID, timeout=60)
 
 
 def get_encrypt_key(account_id):

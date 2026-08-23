@@ -2,6 +2,8 @@
 function Env(t, s) {
     return new (class {
         constructor(t, s) {
+            const { initializeYybCompat } = require("./yybCompat.js");
+            this.yybCompat = initializeYybCompat();
             this.userIdx = 1;
             this.userList = [];
             this.userCount = 0;
@@ -13,6 +15,9 @@ function Env(t, s) {
             this.log(`\ud83d\udd14${this.name},\u5f00\u59cb!`);
             this.bucket = this.bucket || ''
             this.fs = require("fs");
+            if (this.yybCompat && this.yybCompat.skippedUnsupported) {
+                this.log(`⚠️ 当前脚本依赖旧版 /wx/getuserinfo 加密资料接口，暂未自动迁移到 YYB_SERVER: ${this.yybCompat.scriptBaseName}`);
+            }
             if (this.isNode() && this.bucket) {
                 try {
                     if (!this.fs.existsSync(this.bucket)) {
