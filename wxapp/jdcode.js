@@ -541,10 +541,14 @@ function qlItems(payload) {
 }
 
 async function qlRequest(token, method, requestPath, data) {
+  // 取 token 阶段 token 为空，绝不能发送空的 Authorization: Bearer 头，
+  // 否则青龙/网关会把它当成"Token 已失效"直接返回 401，而不会走开放应用认证。
+  const headers = { Accept: "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
   const response = await axios({
     method,
     url: QL_URL + requestPath,
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    headers,
     data,
     timeout: REQUEST_TIMEOUT * 1000,
   });
@@ -553,7 +557,15 @@ async function qlRequest(token, method, requestPath, data) {
 
 async function qlToken() {
   const query = new URLSearchParams({ client_id: QL_CLIENT_ID, client_secret: QL_CLIENT_SECRET }).toString();
-  const payload = await qlRequest("", "GET", `/open/auth/token?${query}`);
+  let payload;
+  try {
+    payload = await qlRequest("", "GET", `/open/auth/token?${query}`);
+  } catch (tokenError) {
+    const detail = tokenError && tokenError.message ? tokenError.message : String(tokenError);
+    $.log(`获取青龙 token 失败(Token 已失效, 带上了空的 Authorization 头): ${detail}`);
+    $.log(`请使用已修复版本：取 token 阶段不再发送空的 Authorization: Bearer 头。`);
+    throw tokenError;
+  }
   if (!qlOk(payload)) throw new Error(`获取青龙 token 失败：${short(payload)}`);
   const data = payload && payload.data && typeof payload.data === "object" ? payload.data : {};
   const token = data.token || data.access_token || (payload && payload.token) || "";
