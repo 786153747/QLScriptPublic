@@ -210,6 +210,15 @@ function cookiePin(cookie) {
   return match ? match[1] : "";
 }
 
+// 统一归一化为青龙要求的 JD_COOKIE 标准格式：pt_key=xxx;pt_pin=xxx;
+// 兼容 pt_key/skey、pt_pin/pin 多种采集来源；无法提取时原样返回。
+function normalizeJdCookie(cookie) {
+  const ptKey = ptKeyValue(cookie);
+  const ptPin = cookiePin(cookie);
+  if (ptKey && ptPin) return `pt_key=${ptKey};pt_pin=${ptPin};`;
+  return cookie;
+}
+
 function normalizePin(pin) {
   const raw = String(pin || "").trim();
   if (!raw) return "";
@@ -626,15 +635,17 @@ async function createQlEnv(token, cookie, remark) {
 }
 
 async function syncToQl(account, cookie) {
+  // 青龙 JD_COOKIE 固定使用 pt_key=xxx;pt_pin=xxx; 格式，写入前统一样式。
+  const normalized = normalizeJdCookie(cookie);
   const token = await qlToken();
   const envs = await qlEnvs(token);
-  const remark = account.remark || normalizePin(cookiePin(cookie)) || `JD_COOKIE-${account.ref}`;
-  const existing = findExistingEnv(envs, cookie, remark);
+  const remark = account.remark || normalizePin(cookiePin(normalized)) || `JD_COOKIE-${account.ref}`;
+  const existing = findExistingEnv(envs, normalized, remark);
   if (existing) {
-    await updateQlEnv(token, existing.id !== undefined ? existing.id : existing._id, cookie, remark);
+    await updateQlEnv(token, existing.id !== undefined ? existing.id : existing._id, normalized, remark);
     return "update";
   }
-  await createQlEnv(token, cookie, remark);
+  await createQlEnv(token, normalized, remark);
   return "create";
 }
 
