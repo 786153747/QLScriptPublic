@@ -22,6 +22,10 @@ const RUN_DIR = path.join(WXAPP_DIR, "_run");
 const LOGS_DIR = path.join(RUN_DIR, "logs");
 const DEFAULT_YYB_SERVER = "http://3.112.226.233:8000@1";
 const INTERVAL_SEC = parseFloat(process.env.INTERVAL_SEC || "4");
+// 分批冷却：每批 BATCH_SIZE 个脚本，批间额外冷却 BATCH_DELAY_SEC 秒，
+// 降低 /wx/code 接口的 429 限流概率。
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "10", 10);
+const BATCH_DELAY_SEC = parseFloat(process.env.BATCH_DELAY_SEC || "20");
 
 // 辅助/非业务脚本，不参与运行
 const HELPER_FILES = new Set([
@@ -43,13 +47,19 @@ const RATE_LIMIT_KEYWORDS = ["429", "too many request", "rate limit", "frequent"
 const EMPTY_CODE_KEYWORDS = ["取 code 为空", "code 为空"];
 
 function parseArgs() {
-  const a = { filter: "", limit: Infinity, start: 0, timeoutMs: 200000, intervalSec: INTERVAL_SEC, file: "" };
+  const a = {
+    filter: "", limit: Infinity, start: 0, timeoutMs: 200000,
+    intervalSec: INTERVAL_SEC, file: "",
+    batchSize: BATCH_SIZE, batchDelaySec: BATCH_DELAY_SEC,
+  };
   for (const raw of process.argv.slice(2)) {
     if (raw.startsWith("--filter=")) a.filter = raw.slice(9);
     else if (raw.startsWith("--limit=")) a.limit = parseInt(raw.slice(8), 10);
     else if (raw.startsWith("--start=")) a.start = parseInt(raw.slice(8), 10);
     else if (raw.startsWith("--timeout=")) a.timeoutMs = parseInt(raw.slice(10), 10);
     else if (raw.startsWith("--file=")) a.file = raw.slice(7);
+    else if (raw.startsWith("--batch-size=")) a.batchSize = parseInt(raw.slice(13), 10);
+    else if (raw.startsWith("--batch-delay=")) a.batchDelaySec = parseFloat(raw.slice(14));
   }
   return a;
 }
@@ -89,7 +99,10 @@ async function main() {
   }
   if (args.filter) scripts = scripts.filter((f) => f.includes(args.filter));
   scripts = scripts.slice(args.start, args.start + args.limit);
-  console.log(`YYB_SERVER = ${yybServer}\n脚本区间   = [${args.start}+${args.limit})\n间隔       = ${args.intervalSec}s\n`);
+  console.log(`YYB_SERVER = ${yybServer}`);
+  console.log(`脚本区间   = [${args.start}+${args.limit})`);
+  console.log(`单脚本间隔 = ${args.intervalSec}s`);
+  console.log(`分批参数   = 每批 ${args.batchSize} 个 / 批间冷却 ${args.batchDelaySec}s\n`);
 
   const results = [];
   for (let i = 0; i < scripts.length; i++) {
@@ -113,7 +126,12 @@ async function main() {
     results.push(obj);
     console.log(`[${(i + 1).toString().padStart(3)}/${scripts.length}] ${file.padEnd(28)} -> ${status.padEnd(4)} ${elapsed}s`);
 
-    if (i < scripts.length - 1) await sleep(args.intervalSec * 1000);
+    if (i < scripts.length - 1) {
+      const atBatchEnd = (i + 1) % args.batchSize === 0;
+      const waitSec = atBatchEnd ? args.batchDelaySec : args.intervalSec;
+      if (atBatchEnd) console.log(`  --- 批次结束，冷却 ${waitSec}s 以规避限流 ---`);
+      await sleep(waitSec * 1000);
+    }
   }
 
   fs.writeFileSync(path.join(RUN_DIR, "result.json"), JSON.stringify(results, null, 2));
@@ -125,6 +143,22 @@ async function main() {
   console.log(`限流: ${cnt((r) => r.status === "限流")}`);
   console.log(`异常: ${cnt((r) => r.status === "异常退出")}`);
   console.log("=".repeat(60));
+
+  // 失败/限流/异常 汇总单，供后续分类分析
+  const trouble = results.filter((r) => r.status !== "成功");
+  fs.writeFileSync(
+    path.join(RUN_DIR, "trouble_summary.json"),
+    JSON.stringify(trouble, null, 2)
+  );
+  if (trouble.length) {
+    console.log("\n存在问题(失败/限流/异常)共 " + trouble.length + " 个：");
+    for (const t of trouble) {
+      const firstErr =
+        (t.tail || "").split(/\r?\n/u).filter((line) => /\S/.test(line)).slice(0, 3).join(" | ");
+      console.log(`  · ${t.file.padEnd(28)} [${t.status}] ${firstErr.slice(0, 90)}`);
+    }
+    console.log("=".repeat(60));
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

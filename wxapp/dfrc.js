@@ -219,7 +219,13 @@ class Task {
         const code = res.code;
         const msg = res.message || res.msg || short(res);
         if (code === 10000) return this.log(`✅ 签到成功`);
-        if (code === 10010 || /已签|签到过|重复|已有签到/.test(String(msg))) return this.log(`✅ 今日已签到（${msg}）`);
+        // 10010 = 已签到；部分实现 message 是无意义的占位符（如 "error"），
+        // 此时只报「今日已签到」即可，避免把误导性文案带给报告/用户
+        const alreadyText = /已签|签到过|重复|已有签到|请勿重复/.test(String(msg || ""));
+        if (code === 10010 || alreadyText) {
+            const hint = alreadyText && !/error/gi.test(String(msg)) ? `（${msg}）` : "";
+            return this.log(`✅ 今日已签到${hint}`);
+        }
         if (retry && /token|登录|未授权|失效|过期|未登录|鉴权|unauth|invalid/i.test(String(msg)) || res.code === 401 || res.status === 401) {
             this.log("会话失效，重新登录后重试");
             this.token = ""; this.apiToken = ""; this.oneid = "";

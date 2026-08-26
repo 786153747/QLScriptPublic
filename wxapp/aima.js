@@ -43,6 +43,14 @@ function maskToken(token = "") {
 function isToken(value = "") {
   return /^eyJ/.test(value.trim()) || value.length > 120;
 }
+// 「活动未开始/火爆/稍后再来」等为服务端临时状态，非脚本错误：本次友好跳过
+function isTransientBiz(data) {
+  const body = data || {};
+  if (Number(body.code) === 910103) return true; // 910103 = MKT_ACTIVITY_NOT_BEGIN
+  return /MKT_ACTIVITY_NOT_BEGIN|活动未开始|请稍后再来|活动异常火爆|稍后再试|未开始|未开放|未开启/.test(
+    String(body.chnDesc || body.engDesc || body.msg || "")
+  );
+}
 
 function readCache() {
   try {
@@ -218,6 +226,10 @@ async function signIn(account, index) {
   );
 
   if (searchRes.status !== 200 || searchRes.data?.code !== 200) {
+    if (searchRes.status === 200 && isTransientBiz(searchRes.data)) {
+      $.log(`⏳ 账号【${index}】${searchRes.data?.chnDesc || "活动暂未开始"}，本次跳过，稍后自动重试`);
+      return;
+    }
     throw new Error(`查询签到状态失败: HTTP ${searchRes.status} ${JSON.stringify(searchRes.data)}`);
   }
 
@@ -228,16 +240,33 @@ async function signIn(account, index) {
   }
 
   $.log(`⏳ 账号【${index}】正在签到...`);
-  const joinRes = await request(
-    "post",
-    `${WXCLIENT_URL}/mkt/activities/sign:join`,
-    token,
-    {
-      data: { activityId: ACTIVITY_ID, activitySceneId: null },
-      account,
-      onToken: setToken,
+  // 「活动未开始」为服务端临时状态：指数退避重试最多 2 次，随后友好跳过
+  const MAX_RETRY = 2;
+  let joinRes;
+  for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+    joinRes = await request(
+      "post",
+      `${WXCLIENT_URL}/mkt/activities/sign:join`,
+      token,
+      {
+        data: { activityId: ACTIVITY_ID, activitySceneId: null },
+        account,
+        onToken: setToken,
+      }
+    );
+    const isTransient = joinRes.status === 200 && isTransientBiz(joinRes.data);
+    if (isTransient && attempt < MAX_RETRY) {
+      const wait = Math.round(Math.pow(2, attempt) * 3000);
+      $.log(`⏳ 账号【${index}】活动未开始/服务繁忙，${(wait / 1000).toFixed(1)}s 后重试...`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
     }
-  );
+    if (isTransient) {
+      $.log(`⏳ 账号【${index}】${joinRes.data?.chnDesc || "活动暂未开始"}，本次跳过，稍后自动重试`);
+      return;
+    }
+    break;
+  }
 
   if (joinRes.status === 200 && joinRes.data?.code === 200) {
     const point = joinRes.data.content?.point || joinRes.data.content?.points || 0;

@@ -233,7 +233,24 @@ class Task {
     }
     async ensureLogin() {
         const cached = readCache()[this.account.openid] || {};
-        if (!this.token && cached.token) { this.token = cached.token; this.apitoken = cached.apitoken || cached.token; this.log("使用缓存token"); return; }
+        if (!this.token && cached.token) {
+            this.token = cached.token;
+            this.apitoken = cached.apitoken || cached.token;
+            // 校验缓存的 token 是否仍有效，避免用过期的 token 直接报「请登录」
+            const check = await this.request("GET", EP_USER_INFO);
+            if (!check?.success && /请登录|未登录|登录|401|token|失效|过期/i.test(String(check?.msg || ""))) {
+                this.log(`缓存token失效（${check?.msg || short(check)}），重新登录`);
+                const cache = readCache();
+                delete cache[this.account.openid];
+                writeCache(cache);
+                this.token = "";
+                this.apitoken = "";
+                await this.login();
+            } else {
+                this.log("使用缓存token");
+            }
+            return;
+        }
         if (!this.token) await this.login();
     }
     async run() {

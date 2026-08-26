@@ -89,7 +89,9 @@ const isOk = (res) => String(res?.code) === "200";
 const msgOf = (res) => res?.message || res?.message || res?.msg || short(res);
 /** 每天跑一次，「已签到」必须当成成功而不是失败 */
 const isAlreadyDone = (t) => /已签|已经签|签到过|重复|已完成|already/i.test(String(t || ""));
-const isAuthError = (t) => /登录|token|未授权|未登录|失效|过期|重新|401/i.test(String(t || ""));
+// 命中即视为“会话/校验失效”：登录成功后操作仍回「验证失败/校验失败」，多数是本次 wx code 会话已降级，
+// 属临时态——应强制用新 code 重新登录再重试一次，而不是直接报死
+const isAuthError = (t) => /登录|token|未授权|未登录|失效|过期|重新|401|验证失败|校验失败/i.test(String(t || ""));
 /** 账号态：这个微信号还没在该平台注册/绑定 —— 不是脚本缺陷，别打 ❌ */
 const isNotRegistered = (t) => /未注册|未绑定|请先注册|请先绑定|not regist/i.test(String(t || ""));
 

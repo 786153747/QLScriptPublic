@@ -299,29 +299,53 @@ async function axiosNoRedirect({ method = "GET", url, headers, data }) {
 
 async function yybGetCode(account, appId = JD_APPID) {
   const url = `${account.server}/wxapp/getCode`;
-  const response = await axios.post(
-    url,
-    { ref: account.ref, app_id: appId },
-    { timeout: REQUEST_TIMEOUT * 1000, proxy: false }
-  );
-  const code = extractWxCode(response.data);
-  if (!code) throw new Error(`YYB ${url} 未返回有效 code: ${short(response.data)}`);
-  return code;
+  const maxAttempts = 4; // YYB 短时间连续取码会限流降级返回空 code，多试几次再判死
+  let lastPayload = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await axios.post(
+      url,
+      { ref: account.ref, app_id: appId },
+      { timeout: REQUEST_TIMEOUT * 1000, proxy: false }
+    );
+    const code = extractWxCode(response.data);
+    if (code) return code;
+    lastPayload = response.data;
+    if (attempt < maxAttempts) {
+      // 空 code 大概率是限流降级，退避后重试
+      await new Promise((resolve) => setTimeout(resolve, 3000 * attempt));
+    }
+  }
+  // 多次仍拿不到 code：多为 YYB 对该微信会话限流降级，或该微信在 YYB 侧需重新授权
+  throw new Error(`YYB ${url} 连续${maxAttempts}次未返回有效 code: ${short(lastPayload)}`);
 }
 
 function extractWxCode(data) {
-  const boxes = [];
-  const push = (obj) => {
-    if (obj && typeof obj === "object") boxes.push(obj);
-  };
-  push(data);
-  push(data && data.data);
-  push(data && data.data && data.data.result);
-  for (const box of boxes) {
-    for (const key of ["wxCode", "wx_code", "jsCode", "jscode", "code", "wxcode", "code_value"]) {
-      const value = box[key];
-      if (typeof value === "string" && value.length >= 8) return value;
-      if (typeof value === "number" && value > 0 && key === "code") continue; // code=0/200 等状态码跳过
+  // 递归逐层下钻任意对象/数组，兼容不同 YYB 返回体包装（含 _yybRaw、深层 result 等）；
+  // 优先取 code 类键名下的字符串，再兜底递归所有子值。避免误吞 status-code 这类短数字。
+  const CODE_KEYS = ["wxCode", "wx_code", "jsCode", "jscode", "wxcode", "code", "code_value"];
+  if (Array.isArray(data) || (data && typeof data === "object")) {
+    for (const box of Array.isArray(data) ? data : [data]) {
+      for (const key of CODE_KEYS) {
+        const value = box && box[key];
+        if (typeof value === "string" && value.trim().length >= 8) return value.trim();
+      }
+    }
+    for (const value of (Array.isArray(data) ? data : Object.values(data))) {
+      const found = extractWxCode(value);
+      if (found) return found;
+    }
+  } else if (typeof data === "string") {
+    const text = data.trim();
+    if (text.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object") return extractWxCode(parsed);
+      } catch (e) {
+        /* 非 JSON，忽略 */
+      }
+    } else if (text.length >= 8) {
+      // 普通字符串且不像是状态码/短文本，当作 code 返回
+      return text;
     }
   }
   return "";

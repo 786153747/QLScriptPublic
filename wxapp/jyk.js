@@ -135,10 +135,20 @@ class Task {
         return res.data || {};
     }
     async prepareAndSign() {
-        const prepared = await this.request("POST", EP_PREPARE);
-        if (Number(prepared?.errno) !== 0) return this.log(`❌ 普通签到 prepare 失败: ${short(prepared)}`);
-        const adToken = String((prepared.data || {}).ad_token || "");
-        if (!adToken) return this.log("❌ 普通签到 prepare 未返回 ad_token");
+        // ad_token 偶发瞬时未下发（广告位繁忙）：指数退避重试最多 2 次，随后友好跳过
+        const MAX_RETRY = 2;
+        let prepared;
+        let adToken = "";
+        for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+            prepared = await this.request("POST", EP_PREPARE);
+            if (Number(prepared?.errno) !== 0) return this.log(`❌ 普通签到 prepare 失败: ${short(prepared)}`);
+            adToken = String((prepared.data || {}).ad_token || (prepared.data || {}).adToken || "");
+            if (adToken) break;
+            const wait = Math.round(Math.pow(2, attempt) * 2000);
+            this.log(`⚠️ prepare 未返回 ad_token（原始响应: ${short(prepared)}），${(wait / 1000).toFixed(1)}s 后重试`);
+            await new Promise((r) => setTimeout(r, wait));
+        }
+        if (!adToken) return this.log("⚠️ 普通签到 prepare 多次未返回 ad_token，本次跳过，下次自动重试");
         const signed = await this.request("POST", EP_SIGN, { ad_token: adToken });
         if (Number(signed?.errno) === 0) {
             const d = signed.data || {};

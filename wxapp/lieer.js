@@ -213,6 +213,12 @@ class Task {
         }
     }
 
+    async refreshLogin() {
+        this.accessToken = "";
+        this.authorization = "";
+        await this.loginByWxCode();
+    }
+
     async checkToken() {
         try {
             await this.getUserInfo(false);
@@ -251,7 +257,7 @@ class Task {
         } catch (e) {
             const message = e.message || e;
             $.log(`账号[${this.index}] 查询积分失败: ${message}`);
-            if (/token|登录|授权|401/i.test(String(message))) this.removeCachedToken();
+            // 积分查询为只读接口，临时 401 不应误清合法 token（否则会级联导致后续签到失败）
         }
     }
 
@@ -270,7 +276,7 @@ class Task {
         } catch (e) {
             const message = e.message || e;
             $.log(`账号[${this.index}] 查询签到状态失败: ${message}`);
-            if (/token|登录|授权|401/i.test(String(message))) this.removeCachedToken();
+            // 签到状态为只读接口，临时 401 不误清 token
         }
     }
 
@@ -279,22 +285,41 @@ class Task {
             $.log(`账号[${this.index}] 今日已签到`);
             return;
         }
-        try {
+        const doRequest = async () => {
             const date = (this.todayDate || formatDate()).replace(/-/g, "/");
-            const data = await this.request({
+            return this.request({
                 method: "GET",
                 apiPath: "/pointsSign/user/sign",
                 params: { date },
             });
+        };
+        try {
+            const data = await doRequest();
             $.log(`账号[${this.index}] 签到成功: +${data?.signReward ?? data?.reward ?? "未知"}积分`);
+            this.isTodaySign = true;
         } catch (e) {
             const message = String(e.message || e);
             if (/已签|重复|今日.*签/i.test(message)) {
                 $.log(`账号[${this.index}] 今日已签到`);
+                this.isTodaySign = true;
+                return;
+            }
+            // token/会话异常：重新登录后重试一次
+            if (/token|登录|授权|401/i.test(message)) {
+                $.log(`账号[${this.index}] 会话异常（${message}），重新登录后重试一次`);
+                await this.refreshLogin();
+                try {
+                    const data = await doRequest();
+                    this.isTodaySign = true;
+                    $.log(`账号[${this.index}] 重试签到成功: +${data?.signReward ?? data?.reward ?? "未知"}积分`);
+                } catch (e2) {
+                    const m2 = String(e2.message || e2);
+                    if (/已签|重复|今日.*签/i.test(m2)) return $.log(`账号[${this.index}] 今日已签到`);
+                    $.log(`账号[${this.index}] 重新登录后仍签到失败: ${m2}`);
+                }
                 return;
             }
             $.log(`账号[${this.index}] 签到失败: ${message}`);
-            if (/token|登录|授权|401/i.test(message)) this.removeCachedToken();
         }
     }
 }

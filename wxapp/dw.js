@@ -147,6 +147,151 @@ function isHardCaptcha(data) {
 }
 const TRANSIENT_CODES = new Set([403, 404, 485]);
 
+// ============ IP 代理轮换（参考 agentrouter.py：拉免费代理→探测→换 IP 规避得物 IP 风控） ============
+// 配置：
+//   DW_PROXY               手动指定代理，如 http://ip:port（仅支持 http/https 代理，socks 不在内置依赖范围内）
+//   DW_PROXY_AUTO          未配置手动代理时是否自动拉取免费代理换 IP，默认 1=开启（0=关闭直连）
+//   DW_PROXY_POOL_SIZE     自动模式下保留的可用代理数，默认 3
+//   DW_PROXY_PROBE_TIMEOUT 代理连通性探测超时(秒)，默认 6
+//   DW_CAPTCHA_PROXY_RETRY 命中滑块后换代理重试次数，默认 3
+function readEnv(name, fallback = "") {
+    const value = process.env[name];
+    return typeof value === "string" ? value.trim() : fallback;
+}
+function clampInt(raw, min, max, fallback) {
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) ? fallback : Math.max(min, Math.min(max, n));
+}
+const DW_PROXY = readEnv("DW_PROXY");
+const DW_PROXY_AUTO = readEnv("DW_PROXY_AUTO", "1");
+const DW_PROXY_POOL_SIZE = clampInt(readEnv("DW_PROXY_POOL_SIZE", "3"), 1, 10, 3);
+const DW_PROBE_TIMEOUT = clampInt(readEnv("DW_PROXY_PROBE_TIMEOUT", "6"), 3, 15, 6);
+const CAPTCHA_PROXY_RETRY = clampInt(readEnv("DW_CAPTCHA_PROXY_RETRY", "3"), 0, 6, 3);
+const PROXY_PROBE_URL = "https://api.ipify.org";
+const PROXY_SOURCES = [
+    // spiderpy 返回 JSON 数组：[{"proxy":"ip:port"}, ...]；proxifly 返回一行一个代理
+    { name: "spiderpy", url: "http://demo.spiderpy.cn/all/", kind: "json" },
+    { name: "proxifly", url: "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt", kind: "text" },
+];
+
+let activeProxy = { url: "", cfg: null }; // 当前账号出口代理
+let proxyPool = [];                        // 探测通过、可换的 http 代理池
+let proxyPoolLock = null;
+
+// 仅接收 http/https 代理；裸 ip:port 自动补 http://；socks 依赖未内置一律忽略
+function normalizeProxyUrl(raw) {
+    const url = String(raw || "").trim();
+    if (!url) return "";
+    if (/^https?:\/\//i.test(url)) return url;
+    if (/^socks\d*/i.test(url)) return "";
+    return "http://" + url;
+}
+// 转成 axios 可用的 proxy 配置
+function proxyToAxiosCfg(proxyUrl) {
+    const parsed = new URL(proxyUrl);
+    const cfg = {
+        protocol: parsed.protocol.replace(":", ""),
+        host: parsed.hostname,
+        port: Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80)),
+    };
+    if (parsed.username) {
+        cfg.auth = {
+            username: decodeURIComponent(parsed.username),
+            password: decodeURIComponent(parsed.password || ""),
+        };
+    }
+    return cfg;
+}
+// 通过候选代理请求一个返回本机 IP 的探针，判断该代理当前是否连通
+async function probeProxy(proxyUrl) {
+    try {
+        const res = await axios.get(PROXY_PROBE_URL, {
+            proxy: proxyToAxiosCfg(proxyUrl),
+            timeout: DW_PROBE_TIMEOUT * 1000,
+            validateStatus: () => true,
+        });
+        return res.status === 200 && /\d{1,3}(\.\d{1,3}){3}/.test(String(res.data || ""));
+    } catch (e) {
+        return false;
+    }
+}
+// 从多个免费代理源拉取候选 ip:port
+async function fetchProxyCandidates() {
+    const list = [];
+    for (const source of PROXY_SOURCES) {
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), DW_PROBE_TIMEOUT * 4000);
+            const res = await fetch(source.url, { signal: ctrl.signal, redirect: "follow" });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const text = await res.text();
+            if (source.kind === "json") {
+                const arr = JSON.parse(text || "[]");
+                if (Array.isArray(arr)) {
+                    for (const item of arr) list.push(normalizeProxyUrl(item && item.proxy));
+                }
+            } else {
+                for (const line of text.split(/\r?\n/)) list.push(normalizeProxyUrl(line));
+            }
+        } catch (e) {
+            // 单源失败不致命，继续下一个源
+        }
+    }
+    return list.filter(Boolean);
+}
+// 自动模式最多探测的候选代理数（免费代理 FULL 池可能成千上万条，且基本不支持 HTTPS，
+// 只测少量即可快速得出"免费代理不适用于得物 HTTPS"的结论，避免漫长空转）
+const MAX_PROXY_CANDIDATES = clampInt(readEnv("DW_PROXY_MAX_PROBES", "12"), 1, 60, 12);
+
+// 缓慢预热出可用代理池（只调用一次）；免费代理大多不支持 HTTPS，测不出结果就尽快返回 false
+async function ensureProxyPool() {
+    if (proxyPool.length >= DW_PROXY_POOL_SIZE) return true;
+    const candidates = await fetchProxyCandidates();
+    for (let i = 0; i < candidates.length && proxyPool.length < DW_PROXY_POOL_SIZE && i < MAX_PROXY_CANDIDATES; i++) {
+        if (await probeProxy(candidates[i])) proxyPool.push(candidates[i]);
+    }
+    return proxyPool.length > 0;
+}
+// 首次运行时确保有可用出口代理；失败回退直连不阻塞签到
+async function ensureActiveProxy() {
+    if (DW_PROXY) {
+        if (!activeProxy.cfg) activeProxy = { url: DW_PROXY, cfg: proxyToAxiosCfg(DW_PROXY) };
+        return true;
+    }
+    if (DW_PROXY_AUTO === "0") return false; // 显式关闭自动代理 → 直连
+    if (activeProxy.cfg) return true;
+    if (proxyPoolLock) return !!activeProxy.cfg;
+    proxyPoolLock = true;
+    let ok = false;
+    try {
+        ok = await ensureProxyPool();
+    } finally {
+        proxyPoolLock = null;
+    }
+    if (!ok) {
+        // 免费 HTTP 代理对得物这类 HTTPS 站点支持极差（CONNECT 常 400/不通）。
+        // 明确提示，回退直连；若需换 IP 绕过风控，请配置可通 HTTPS 的 DW_PROXY。
+        $.log("未找到可用的 HTTPS 代理（免费 HTTP 代理不适用于得物），本次回退直连；如需换 IP 请设置 DW_PROXY=http://可用https代理:端口");
+        return false;
+    }
+    switchActiveProxy();
+    return !!activeProxy.cfg;
+}
+// 换一个出口代理：自动模式下从池中轮换，手动代理无法更换
+function switchActiveProxy() {
+    if (DW_PROXY) return activeProxy.cfg; // 手动代理由用户指定，命中滑块不重试
+    if (proxyPool.length === 0) return null;
+    const url = proxyPool.shift();
+    proxyPool.push(url);
+    activeProxy = { url, cfg: proxyToAxiosCfg(url) };
+    return activeProxy.cfg;
+}
+// 请求附带出口代理；未启用则显式禁用系统代理，避免误走环境变量里的代理
+function proxyOption() {
+    return activeProxy.cfg ? { proxy: activeProxy.cfg } : { proxy: false };
+}
+
 class Task {
     constructor(raw) {
         this.index = $.userIdx++;
@@ -189,6 +334,7 @@ class Task {
         };
         const res = await axios.request({
             method: "POST", url: BASE + LOGIN_PATH, data: body, headers,
+            ...proxyOption(),
             timeout: 20000, validateStatus: () => true,
         });
         let xAuth = String(res.headers["x-auth-token"] || res.headers["X-Auth-Token"] || "").replace("Bearer ", "").trim();
@@ -250,6 +396,7 @@ class Task {
         const query = { ...params, sign: bizSign(params) };
         const res = await axios.request({
             method: "GET", url: BASE + apiPath, params: query, headers: this.bizHeaders(),
+            ...proxyOption(),
             timeout: 20000, validateStatus: () => true,
         });
         return { status: res.status, data: res.data || {} };
@@ -268,6 +415,7 @@ class Task {
             }
             const res = await axios.request({
                 method: "POST", url: BASE + apiPath, params: query, data: body, headers,
+                ...proxyOption(),
                 timeout: 20000, validateStatus: () => true,
             });
             last = { status: res.status, data: res.data || {} };
@@ -290,7 +438,7 @@ class Task {
         } catch (e) {}
         return { signed: false, ok: Number(data.code) === 200 };
     }
-    async sign(retry = true) {
+    async sign(retry = true, captchaRetries = CAPTCHA_PROXY_RETRY) {
         // 1) 先查签到列表，若今日已签直接返回
         const chk = await this.checkSignedToday();
         if (chk.auth) {
@@ -301,8 +449,14 @@ class Task {
         // 2) 执行签到
         const { status, data } = await this.bizPost(EP_SIGN_IN, {});
         if (isHardCaptcha(data)) {
+            const switched = await switchActiveProxy();
+            if (switched && captchaRetries > 0) {
+                this.log(`🚫 触发滑块（当前出口 IP 被得物风控），已切换代理 ${activeProxy.url}，重试签到（剩 ${captchaRetries} 次）`);
+                await new Promise((r) => setTimeout(r, 1500));
+                return this.sign(false, captchaRetries - 1);
+            }
             this.captcha = true;
-            return this.log(`🚫 触发滑块验证码，当前 IP 被得物风控，请在 App 内手动签到或换网络重跑（非脚本错误）: ${short(data.msg)}`);
+            return this.log(`🚫 触发滑块验证码，换 IP 后仍未通过，需在得物 App 内手动签到或更换代理/网络重跑（非脚本错误）: ${short(data.msg)}`);
         }
         if (Number(data.code) === 711110001) return this.log("✅ 今日已签到（服务端确认）");
         if (status === 200 && Number(data.code) === 200) {
@@ -332,6 +486,7 @@ class Task {
     async run() {
         if (!this.account.openid) { this.log("跳过：变量值里没有 openid"); return; }
         try {
+            await ensureActiveProxy();
             await this.ensureLogin();
             await this.sign();
         } catch (e) {

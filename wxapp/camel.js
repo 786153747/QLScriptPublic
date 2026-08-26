@@ -91,6 +91,10 @@ function isTokenError(message) {
 function isRepeatCheckin(message) {
     return /已达最大参与次数|已签到|重复签到|今日已参与|已经签到|已参与/.test(String(message || ""));
 }
+// 「活动异常火爆/未开始/稍后再试」等为服务端临时状态，非脚本错误：本次跳过、稍后自动重试
+function isTransientSignError(message) {
+    return /活动异常火爆|活动火爆|请稍后再试|稍后再试|活动未开始|系统繁忙|火爆|未开启/.test(String(message || ""));
+}
 
 // smallcat 偶发 "获取失败"(运行时会话抖动)：刷新会话后间隔重试，最多 4 次
 async function getWxCode(openid) {
@@ -327,29 +331,45 @@ class Task {
             this.log("✅ 今日已签到，跳过提交");
             return;
         }
-        try {
-            const data = await this.request({
-                path: "/wscump/checkin/checkinV2.json",
-                params: { checkinId: this.checkinId },
-            });
-            const awards = (data?.list || [])
-                .map((item) => item?.infos?.title || item?.title)
-                .filter(Boolean)
-                .join(", ");
-            this.log(`✅ 签到成功: ${data?.desc || ""}${awards ? ` ${awards}` : ""}`);
-        } catch (e) {
-            const message = String(e.message || e);
-            if (isRepeatCheckin(message)) {
-                this.log(`✅ 今日已签到（${message}）`);
-                return;
+        // 指数退避重试最多 2 次，末次失败再分类提示，避免中间尝试刷屏
+        const MAX_RETRY = 2;
+        for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+            if (attempt > 0) {
+                const waitMs = Math.round(Math.pow(2, attempt - 1) * 3000);
+                this.log(`  [重试 ${attempt}/${MAX_RETRY}] ${(waitMs / 1000).toFixed(1)}s 后重新签到`);
+                await new Promise((r) => setTimeout(r, waitMs));
             }
-            // 有赞签到要求先授权手机号/注册会员：属账号未注册态，非签到失败
-            if (/手机号未授权|未授权手机|请先授权|未注册|未绑定|绑定手机|会员/.test(message)) {
-                this.log(`⚠️ 该微信号还没在骆驼(有赞)授权手机号/注册会员（${message}），先在小程序里授权登录一次再跑`);
+            try {
+                const data = await this.request({
+                    path: "/wscump/checkin/checkinV2.json",
+                    params: { checkinId: this.checkinId },
+                });
+                const awards = (data?.list || [])
+                    .map((item) => item?.infos?.title || item?.title)
+                    .filter(Boolean)
+                    .join(", ");
+                this.log(`✅ 签到成功: ${data?.desc || ""}${awards ? ` ${awards}` : ""}`);
                 return;
+            } catch (e) {
+                const message = String(e.message || e);
+                if (isRepeatCheckin(message)) {
+                    this.log(`✅ 今日已签到（${message}）`);
+                    return;
+                }
+                // 有赞签到要求先授权手机号/注册会员：属账号未注册态，非签到失败
+                if (/手机号未授权|未授权手机|请先授权|未注册|未绑定|绑定手机|会员/.test(message)) {
+                    this.log(`⚠️ 该微信号还没在骆驼(有赞)授权手机号/注册会员（${message}），先在小程序里授权登录一次再跑`);
+                    return;
+                }
+                if (attempt === MAX_RETRY) {
+                    if (isTransientSignError(message)) {
+                        this.log(`⚠️ 服务繁忙（${message}），本次跳过，稍后自动重试`);
+                        return;
+                    }
+                    this.log(`❌ 签到失败: ${message}`);
+                    if (isTokenError(message)) this.removeCachedToken();
+                }
             }
-            this.log(`❌ 签到失败: ${message}`);
-            if (isTokenError(message)) this.removeCachedToken();
         }
     }
 

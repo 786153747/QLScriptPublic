@@ -101,9 +101,13 @@ class Task {
             timeout: 20000, validateStatus: () => true,
         });
         const d = res.data || {};
-        this.token = (d.obj && d.obj.token) || (d.data && d.data.token) || "";
+        const obj = d.obj || {};
+        const bodyData = d.data || {};
+        // 实测登录响应 obj.token 与 obj.sytToken 并存，token 字段实际名为 sytToken，故两者都取
+        this.token = obj.token || obj.sytToken || bodyData.token || bodyData.sytToken || "";
         if (!this.token) throw new Error(`登录失败: ${d.message || short(d)}`);
-        this.userId = userIdFromJwt(this.token);
+        // JWT 的 sub 实为 {app, at}，不含 userId；用登录返回的 unionId 兜底作业务 userId
+        this.userId = userIdFromJwt(this.token) || String(obj.unionId || bodyData.unionId || "");
         if (!this.userId) throw new Error(`登录 token 未解析出 userId: ${short(d)}`);
         const cache = readCache();
         cache[this.account.openid] = { token: this.token, userId: this.userId, updatedAt: new Date().toISOString() };

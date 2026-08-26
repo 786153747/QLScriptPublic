@@ -59,6 +59,11 @@ def is_token_error(message):
     text = str(message)
     return any(key in text for key in ["40101", "40102", "token", "登录", "授权", "过期", "失效"])
 
+def is_duplicate_checkin(message):
+    """“请勿重复打卡/今日已签到”等文案表示今天已签过，应视为成功而非报错终止。"""
+    text = str(message or "")
+    return any(key in text for key in ["请勿重复", "重复打卡", "今日已签", "已经签到", "不可重复"])
+
 def wx_headers():
     return {
         "auth": WX_AUTH,
@@ -333,7 +338,12 @@ def punch_in(token):
                 print(f"获得点数: {reward.get('point', 0)}")
                 print(f"成长值: {reward.get('grow', 0)}")
             else:
-                print(f"❌ 签到失败，错误信息：{result.get('message', '未知错误')}")
+                message = result.get("message", "未知错误")
+                if is_duplicate_checkin(message):
+                    # 今天已签过：属预期成功，不当作失败，也不标记 ❌，避免报告误判
+                    print("✅ 今日已签到，无需重复打卡")
+                else:
+                    print(f"❌ 签到失败，错误信息：{message}")
         else:
             print(f"❌ 请求失败，状态码：{response.status_code}")
     except Exception as e:

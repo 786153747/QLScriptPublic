@@ -339,6 +339,16 @@ class Task {
       params: { code: pick(r2.data) },
       hdrs: gardenHeaders({ loginCode }),
     });
+    // 「未获得微信用户授权手机号」是账号侧缺手机号授权，重试也无效，直接给出手动指引并终止。
+    if (!okCode(auth)) {
+      const em = auth?.message || auth?.msg || auth?.errMsg || shortJson(auth, 300);
+      if (/手机号.*授权|未授权.*手机号|授权手机号|未获得微信用户授权/i.test(String(em))) {
+        throw new Error(
+          `garden 登录失败: ${em}。需要先在【习酒】小程序里手动完成手机号授权后，脚本才能继续，脚本无法自动解决，请登录习酒小程序授权后重跑`
+        );
+      }
+      throw new Error(`garden 登录失败: ${em}`);
+    }
     const authorizedToken = assertOk(auth, "garden 登录")?.authorized_token;
     if (!authorizedToken) throw new Error(`garden 登录未返回 authorized_token: ${shortJson(auth)}`);
 

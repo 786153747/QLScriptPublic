@@ -190,8 +190,13 @@ class Task {
     );
     if (!data?.status) throw new Error(data?.message || "wx_server 获取 operatedata 失败");
     const info = data.data || {};
-    if (!info.code || !info.iv || !info.encryptedData) {
-      throw new Error(`wx_server operatedata 缺少必要字段: ${JSON.stringify(data)}`);
+    if (!info.code) {
+      throw new Error(`wx_server operatedata 缺少 code: ${JSON.stringify(data)}`);
+    }
+    // 微信加密资料字段(encryptedData/iv/signature)可能为空：该账号未授权头像昵称等用户资料。
+    // 属兼容场景——仍携带 code 尝试仅 code 登录（registerWxUserInfo 存在「仅 code」兼容分支），缺字段只提示不中断
+    if (!info.iv || !info.encryptedData) {
+      $.log(`账号[${this.index}] operatedata 缺少加密资料字段(encryptedData/iv/签名)，改用仅 code 兼容登录`);
     }
     return info;
   }

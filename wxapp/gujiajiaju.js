@@ -274,7 +274,7 @@ class Task {
     }
   }
 
-  async sign() {
+  async sign(forceRelogin = false) {
     try {
       const ret = await this.request({
         method: "POST",
@@ -293,12 +293,25 @@ class Task {
         $.log(`账号[${this.index}] 今日已签到`);
         return;
       }
+      // 积分服务报「未登录」：重新登录后重试一次
+      if (!forceRelogin && (Number(ret.code) === 401 || /未登录|登录|token|失效|过期/i.test(msg))) {
+        $.log(`账号[${this.index}] 积分服务提示「${msg}」，重新登录后重试一次`);
+        this.clearCachedToken();
+        await this.ensureLogin();
+        return this.sign(true);
+      }
       throw new Error(msg);
     } catch (e) {
       const msg = e.message || String(e);
       if (/已签|重复|already|今日/.test(msg)) {
         $.log(`账号[${this.index}] 今日已签到`);
         return;
+      }
+      if (!forceRelogin && /未登录|登录|token|失效|过期|401/i.test(msg)) {
+        $.log(`账号[${this.index}] 积分服务未登录（${msg}），重新登录后重试一次`);
+        this.clearCachedToken();
+        await this.ensureLogin();
+        return this.sign(true);
       }
       throw e;
     }
