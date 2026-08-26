@@ -14,6 +14,8 @@ cron: 20 8 * * *
 const { Env } = require("../tools/env.js");
 const $ = new Env("飞鹤星妈会");
 const axios = require("axios");
+const WeChatServer = require("./wcs.js");
+
 
 const CK_NAME = "fhxmh";
 const APP = { name: "飞鹤星妈会", appid: "wxc83b55d61c7fc51d" };
@@ -70,16 +72,15 @@ async function request(options) {
     return { status: res.status, headers: res.headers || {}, data: res.data };
 }
 
-async function getWxCode(appid, openid) {
-    if (!WX_AUTH) throw new Error("未配置 wx_auth");
-    const { status, data } = await request({
-        method: "POST",
-        url: `${WX_SERVER_URL}/wx/code`,
-        headers: { auth: WX_AUTH, "content-type": "application/json" },
-        data: { appid, openid },
+async function getWxCode(openid) {
+    const wcs = new WeChatServer({
+        url: WX_SERVER_URL || process.env.wx_server_url,
+        appid: APP.appid,
+        auth: WX_AUTH,
     });
-    const code = data?.code || data?.data?.code || data?.phoneCode || data?.data?.phoneCode;
-    if (status !== 200 || !code) throw new Error(`获取code失败 HTTP ${status}: ${short(data)}`);
+    const result = await wcs.getCode(openid);
+    const code = result?.data?.code || result?.data?.data?.code;
+    if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
     return code;
 }
 
@@ -109,7 +110,7 @@ class FeiheMom {
     }
 
     async login() {
-        const code = await getWxCode(APP.appid, this.openid);
+        const code = await getWxCode(this.openid);
         const res = await request({
             method: "POST",
             url: `${this.base}/social/ma`,

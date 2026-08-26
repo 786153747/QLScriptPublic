@@ -17,6 +17,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const querystring = require("querystring");
+const WeChatServer = require("./wcs.js");
 
 const MINI_APP_ID = "wx3aa848f81dfa0967";
 const KDT_ID = "104905610";
@@ -175,24 +176,14 @@ class Task {
     }
 
     async getWxCode() {
-        const wxServerUrl = process.env.wx_server_url;
-        const wxAuth = process.env.wx_auth;
-        if (!wxServerUrl || !wxAuth) throw new Error("未配置 wx_server_url 或 wx_auth");
-
-        const { status, data } = await axios.post(
-            `${wxServerUrl.replace(/\/$/, "")}/wx/getuserinfo`,
-            { appid: MINI_APP_ID, openid: this.openid },
-            {
-                headers: {
-                    auth: wxAuth,
-                    "content-type": "application/json",
-                },
-                timeout: 15000,
-                validateStatus: () => true,
-            }
-        );
-        const code = data?.code || data?.data?.code;
-        if (status !== 200 || !code) throw new Error(`wx_server 获取code失败: HTTP ${status} ${JSON.stringify(data)}`);
+        const wcs = new WeChatServer({
+            url: process.env.wx_server_url,
+            appid: MINI_APP_ID,
+            auth: process.env.wx_auth,
+        });
+        const result = await wcs.getCode(this.openid);
+        const code = result?.data?.code || result?.data?.data?.code;
+        if (!code) throw new Error(`wx_server 获取code失败: ${result?.data?.message || JSON.stringify(result?.data)}`);
         return code;
     }
 

@@ -14,6 +14,8 @@ cron: 35 8 * * *
 const { Env } = require("../tools/env.js");
 const $ = new Env("华住会");
 const axios = require("axios");
+const WeChatServer = require("./wcs.js");
+
 
 const ckName = "huazhu";
 const MINI_APP_ID = "wx286efc12868f2559";
@@ -79,16 +81,15 @@ async function request(options) {
 }
 
 async function getWxCode(openid) {
-  if (!WX_AUTH) throw new Error("未配置 wx_auth，无法从 wx_server 获取 code");
-  const { status, data } = await request({
-    method: "POST",
-    url: `${WX_SERVER_URL}/wx/code`,
-    headers: { auth: WX_AUTH, "Content-Type": "application/json" },
-    data: { appid: MINI_APP_ID, openid },
-  });
-  const code = data?.data?.code || data?.code;
-  if (status !== 200 || !code) throw new Error(`获取 code 失败 HTTP ${status}: ${short(data)}`);
-  return code;
+    const wcs = new WeChatServer({
+        url: WX_SERVER_URL || process.env.wx_server_url,
+        appid: MINI_APP_ID,
+        auth: WX_AUTH,
+    });
+    const result = await wcs.getCode(openid);
+    const code = result?.data?.code || result?.data?.data?.code;
+    if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
+    return code;
 }
 
 function wxHeaders(sId = "") {

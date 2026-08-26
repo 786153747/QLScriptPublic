@@ -34,6 +34,8 @@ cron: 18 8 * * *
 const { Env } = require("../tools/env.js");
 const $ = new Env("丸丫甄选签到");
 const axios = require("axios");
+const WeChatServer = require("./wcs.js");
+
 const fs = require("fs");
 const path = require("path");
 
@@ -92,43 +94,15 @@ function isRepeatCheckin(message) {
 
 // smallcat 偶发 "获取失败"(运行时会话抖动)：刷新会话后间隔重试，最多 4 次
 async function getWxCode(openid) {
-    if (!WX_AUTH) throw new Error("未配置 wx_auth");
-    const headers = { auth: WX_AUTH, "Content-Type": "application/json" };
-    const body = { appid: MINI_APP_ID, openid };
-    let lastMsg = "";
-    for (let attempt = 0; attempt < 4; attempt++) {
-        if (attempt) {
-            try {
-                await axios.request({
-                    method: "POST",
-                    url: `${WX_SERVER_URL}/wx/refresh`,
-                    headers,
-                    data: body,
-                    timeout: 30000,
-                    validateStatus: () => true,
-                });
-            } catch (e) {
-                // 刷新失败不阻断，继续重试取 code
-            }
-            await new Promise((r) => setTimeout(r, 3000));
-        }
-        const { status, data } = await axios.request({
-            method: "POST",
-            url: `${WX_SERVER_URL}/wx/code`,
-            headers,
-            data: body,
-            timeout: 30000,
-            validateStatus: () => true,
-        });
-        if (data && data.status === false) {
-            lastMsg = data.message || "获取失败";
-            continue;
-        }
-        const code = data?.code || data?.data?.code;
-        if (status === 200 && code) return code;
-        lastMsg = `HTTP ${status}: ${short(data)}`;
-    }
-    throw new Error(`获取code失败(已重试): ${lastMsg}`);
+    const wcs = new WeChatServer({
+        url: WX_SERVER_URL || process.env.wx_server_url,
+        appid: MINI_APP_ID,
+        auth: WX_AUTH,
+    });
+    const result = await wcs.getCode(openid);
+    const code = result?.data?.code || result?.data?.data?.code;
+    if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
+    return code;
 }
 
 class Task {

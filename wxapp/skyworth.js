@@ -15,6 +15,7 @@ const { Env } = require("../tools/env.js");
 const $ = new Env("创维会员中心");
 const axios = require("axios");
 const crypto = require("crypto");
+const WeChatServer = require("./wcs.js");
 
 const CK_NAME = process.env.skyworth ? "skyworth" : "chuangwei";
 const MINI_APP_ID = "wxff438d3c60c63fb6";
@@ -114,15 +115,15 @@ async function request(options) {
 }
 
 async function getWxCode(openid) {
-  if (!WX_AUTH) throw new Error("未配置 wx_auth，无法从 wx_server 获取 code");
-  const { status, data } = await request({
-    method: "POST",
-    url: `${WX_SERVER_URL}/wx/code`,
-    headers: { auth: WX_AUTH },
-    data: { appid: MINI_APP_ID, openid },
+  // 统一走 YYB /wxapp/getCode（参考仓库写法），wcs.js 已归一化响应
+  const wcs = new WeChatServer({
+    url: WX_SERVER_URL || process.env.wx_server_url,
+    appid: MINI_APP_ID,
+    auth: WX_AUTH,
   });
-  const code = data?.data?.code || data?.code;
-  if (status !== 200 || !code) throw new Error(`获取 code 失败 HTTP ${status}: ${short(data)}`);
+  const result = await wcs.getCode(openid);
+  const code = result?.data?.code || result?.data?.data?.code;
+  if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
   return code;
 }
 

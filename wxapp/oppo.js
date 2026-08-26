@@ -23,6 +23,8 @@ wx_auth        必填，wx_server 鉴权值
 
 const { Env } = require("../tools/env.js");
 const axios = require("axios");
+const WeChatServer = require("./wcs.js");
+
 
 const $ = new Env("OPPO");
 
@@ -107,19 +109,14 @@ async function request(options) {
 }
 
 async function getWxCode(openid) {
-    if (!WX_AUTH) throw new Error("未配置 wx_auth，无法从 wx_server 获取 code");
-    const { status, data } = await request({
-        method: "POST",
-        url: `${WX_SERVER_URL}/wx/code`,
-        headers: {
-            auth: WX_AUTH,
-            "content-type": "application/json",
-            Referer: `https://servicewechat.com/${APP.appid}/${APP.version}/page-frame.html`,
-        },
-        data: { appid: APP.appid, openid },
+    const wcs = new WeChatServer({
+        url: WX_SERVER_URL || process.env.wx_server_url,
+        appid: APP.appid,
+        auth: WX_AUTH,
     });
-    const code = data?.data?.code || data?.code;
-    if (status !== 200 || !code) throw new Error(`获取 code 失败 HTTP ${status}: ${short(data)}`);
+    const result = await wcs.getCode(openid);
+    const code = result?.data?.code || result?.data?.data?.code;
+    if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
     return code;
 }
 

@@ -31,6 +31,8 @@ cron: 21 8 * * *
 const { Env } = require("../tools/env.js");
 const $ = new Env("同程旅行里程签到");
 const axios = require("axios");
+const WeChatServer = require("./wcs.js");
+
 
 const CK_NAME = "tclx_lc";
 const APP = { name: "同程旅行里程签到", appid: "wx336dcaf6a1ecf632" };
@@ -75,35 +77,16 @@ async function request(options) {
     return { status: res.status, headers: res.headers || {}, data: res.data };
 }
 
-async function getWxCode(appid, openid) {
-    if (!WX_AUTH) throw new Error("未配置 wx_auth");
-    const headers = { auth: WX_AUTH, "content-type": "application/json" };
-    let lastMsg = "";
-    for (let attempt = 0; attempt < 4; attempt++) {
-        if (attempt) {
-            // smallcat 偶发 "获取失败"(会话抖动)，刷新会话后间隔重试
-            try {
-                await request({ method: "POST", url: `${WX_SERVER_URL}/wx/refresh`, headers, data: { appid, openid } });
-            } catch (e) {
-                // 刷新失败不阻断，继续重试取 code
-            }
-            await new Promise((r) => setTimeout(r, 3000));
-        }
-        const { status, data } = await request({
-            method: "POST",
-            url: `${WX_SERVER_URL}/wx/code`,
-            headers,
-            data: { appid, openid },
-        });
-        if (data && data.status === false) {
-            lastMsg = data.message || "获取失败";
-            continue;
-        }
-        const code = data?.code || data?.data?.code;
-        if (status === 200 && code) return code;
-        lastMsg = `HTTP ${status}: ${short(data)}`;
-    }
-    throw new Error(`获取code失败(已重试): ${lastMsg}`);
+async function getWxCode(openid) {
+    const wcs = new WeChatServer({
+        url: WX_SERVER_URL || process.env.wx_server_url,
+        appid: APP.appid,
+        auth: WX_AUTH,
+    });
+    const result = await wcs.getCode(openid);
+    const code = result?.data?.code || result?.data?.data?.code;
+    if (!code) throw new Error(`获取code失败: ${result?.data?.message || short(result?.data)}`);
+    return code;
 }
 
 class Tongcheng {
@@ -128,7 +111,7 @@ class Tongcheng {
     }
 
     async login() {
-        const code = await getWxCode(APP.appid, this.openid);
+        const code = await getWxCode(this.openid);
         const res = await request({
             method: "POST",
             url: "https://wx.17u.cn/wechatappapi/wxUser/login",
