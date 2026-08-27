@@ -250,7 +250,9 @@ class Task {
             method: 'GET',
             url: `https://mall-mobile-v6.vecrp.com/mobile/customer/getMyAllPoint`,
             params: {
-                shopId: this.shopId
+                shopId: this.shopId,
+                // 该接口按积分账户查询，缺 integralAccount 时服务端报「授权失败」
+                ...(this.integralAccount ? { integralAccount: this.integralAccount } : {}),
             },
             headers: {},
 
@@ -258,10 +260,11 @@ class Task {
         let {
             data: result
         } = await this.request(options);
-        if (result?.success) {
+        if (result?.success && Array.isArray(result.result) && result.result.length) {
             $.log(`账号[${this.index}]` + `积分:${result.result[0].score}`);
         } else {
-            $.log(`账号[${this.index}] 获取积分-失败:${result.msg}❌`)
+            // 积分是附带信息，查不到不影响签到主流程
+            $.log(`账号[${this.index}] 积分查询跳过:${result?.msg || "无数据"}`)
         }
     }
 

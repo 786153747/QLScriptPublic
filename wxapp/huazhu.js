@@ -146,6 +146,10 @@ class Huazhu {
     this.sId = data?.Extend?.crossAuth || data?.Data || "";
     this.memberId = data?.Extend?.memberId || "";
     if (!this.sId) throw new Error(`登录响应缺少 sId: ${short(data)}`);
+    if (!this.memberId) {
+      // authCheck 对未注册会员只发匿名会话(crossAuth/memberId 均空)，个人中心/签到接口会 401 未登录
+      throw new Error("该微信还不是华住会员（memberId 为空，仅匿名会话），请先在华住会小程序内用手机号注册/登录一次再跑");
+    }
     this.log(`登录成功 memberId=${this.memberId || "-"} sId=${mask(this.sId)}`);
   }
 
