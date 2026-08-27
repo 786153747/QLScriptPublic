@@ -23,6 +23,7 @@ const path = require("path");
 const WeChatServer = require("./wcs.js");
 
 const ckName = "hisense_aijia";
+const DEBUG = /^(1|true|yes)$/i.test(String(process.env.hisense_aijia_debug || process.env.debug || ""));
 const MINI_APP_ID = "wxf488d623a17cd7b5";
 const PACKAGE_VERSION = "115";
 const MINI_ID = "105";
@@ -191,6 +192,8 @@ function parseAccount(raw) {
   }
 
   if (text.startsWith("o")) return { openid: text };
+  // 短值多为 YYB/wx_server 注入的账号引用(如 "1")，按 openid 走服务端自动登录换 customerId/token
+  if (text.length < 32 && !/^ey[A-Za-z0-9_-]+$/.test(text)) return { openid: text };
   return { accessToken: text };
 }
 
@@ -217,6 +220,11 @@ function addSearch(url, params = {}) {
   return u.toString();
 }
 
+function maskSensitive(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.replace(/("(?:accessToken|refreshToken|loginKey|token|encryptedData|iv)"\s*:\s*")([^"]+)(")/g, (_m, prefix, secret, suffix) => `${prefix}${mask(secret)}${suffix}`);
+}
+
 async function request(method, base, urlPath, data = {}, options = {}) {
   const url = urlPath.startsWith("http") ? urlPath : `${base}${urlPath}`;
   const postAndJSON = method.toUpperCase() === "POST" && (options.contentType || "application/json").includes("json");
@@ -241,7 +249,9 @@ async function request(method, base, urlPath, data = {}, options = {}) {
   if (method.toUpperCase() === "GET") config.params = payload;
   else config.data = payload;
 
+  if (DEBUG) $.log(`⇒ [${method.toUpperCase()}] ${url}  ${maskSensitive(config.params || config.data)}`);
   const res = await axios(config);
+  if (DEBUG) $.log(`⇐ [${res.status}] ${short(maskSensitive(res.data), 600)}`);
   return { status: res.status, data: res.data, text: typeof res.data === "string" ? res.data : JSON.stringify(res.data) };
 }
 
@@ -360,7 +370,7 @@ class Task {
       { appid: MINI_APP_ID, openid: this.openid },
       { headers: { auth: wechat.auth }, timeout: 60000, validateStatus: () => true }
     );
-    if (!data?.status) throw new Error(data?.message || "wx_server 获取手机号授权 code 失败");
+    if (!data?.status) throw new Error(data?.message || data?.msg || `wx_server 获取手机号授权 code 失败: ${short(data, 300)}`);
     const phoneCode = data.data?.code || data.code || "";
     if (!phoneCode) throw new Error(`wx_server 未返回手机号 code: ${short(data, 500)}`);
     const raw = data.data?.raw || {};
@@ -479,12 +489,15 @@ class Task {
       return;
     }
     if (this.accessToken && !this.customerId) {
-      $.log(`账号[${this.index}] 已有 token 但缺少 customerId，请使用 customerId#accessToken 或 JSON 配置`);
+      // accessToken 可换 loginKey，loginKey 登录响应携带 customerId，无需手动配置
+      $.log(`账号[${this.index}] 已有 token 但缺少 customerId，尝试 accessToken → loginKey 自动登录...`);
+      await this.fetchLoginKey();
+      if (await this.loginByLoginKey()) return;
     }
     if (await this.refreshAccessToken()) return;
     if (await this.loginByLoginKey()) return;
     if (await this.loginByPhoneAuth()) return;
-    throw new Error("未获取到海信业务 customerId/accessToken；首次账号需要手机号授权，请配置 customerId#accessToken 或 JSON");
+    throw new Error("未获取到海信业务 customerId/accessToken；首次账号需要手机号授权，请配置 openid（自动登录）、customerId#accessToken 或 JSON");
   }
 
   commonPointParams() {

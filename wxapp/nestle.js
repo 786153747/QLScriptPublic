@@ -90,7 +90,7 @@ function firstValue(...values) {
 
 async function request(options) {
     const res = await axios.request({
-        timeout: 20000,
+        timeout: 60000,
         validateStatus: () => true,
         ...options,
         headers: {

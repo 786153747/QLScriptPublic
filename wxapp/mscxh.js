@@ -119,7 +119,7 @@ class Task {
         const res = await axios.request({
             method: "GET", url: API_URL, params: signed,
             headers: { "User-Agent": UA, authority: HOST, Accept: "application/json, text/plain, */*" },
-            timeout: 20000, validateStatus: () => true,
+            timeout: 60000, validateStatus: () => true,
         });
         return normalize(res.data);
     }
@@ -137,7 +137,7 @@ class Task {
                 "Content-Type": "application/x-www-form-urlencoded",
                 Accept: "application/json, text/plain, */*",
             },
-            timeout: 20000, validateStatus: () => true,
+            timeout: 60000, validateStatus: () => true,
         });
         const body = normalize(res.data);
         if (codeOf(body) === 0 && body.data && body.data.access_token) {

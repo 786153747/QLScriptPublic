@@ -115,7 +115,9 @@ class Task {
         } = await axios.request(options);
 
         if (result?.code == '0') {
-            $.log(`🌸账号[${this.index}] 获取用户信息[${result.data.member.mobile}] 积分[${result.data.member.points}]`)
+            // member 可能为 null（服务端未建档），直接取 .mobile 会抛 TypeError
+            const member = result.data?.member || {};
+            $.log(`🌸账号[${this.index}] 获取用户信息[${member.mobile ?? "未建档"}] 积分[${member.points ?? 0}]`)
         } else {
             $.log(`🌸账号[${this.index}] 获取用户信息-失败:${result.msg}❌`)
         }

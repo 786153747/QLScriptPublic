@@ -162,7 +162,8 @@ class Task {
         if (!this.token && cached.token) {
             this.token = cached.token;
             this.name = cached.name || "";
-            if (await this.queryPoints(false)) {
+            // true=接口确认有效; false=明确鉴权失效需重登; "skip"=接口不可用(如404)无法验证，信任缓存
+            if (await this.queryPoints(false) !== false) {
                 this.log("使用缓存token");
                 return;
             }
@@ -179,11 +180,12 @@ class Task {
             res = await this.request(EP_POINTS, {});
         } catch (e) {
             if (needLog) this.log(`读取积分跳过: ${e.message || e}`);
-            return false;
+            // 仅 HTTP 401 可断定 token 失效；404/网络异常等不代表登录态问题
+            return /HTTP 401/.test(String(e.message || e)) ? false : "skip";
         }
         if (!isOk(res)) {
             if (needLog) this.log(`读取积分失败: ${msgOf(res)}`);
-            return false;
+            return isAuthError(msgOf(res)) ? false : "skip";
         }
         const d = res.data;
         const points = d && typeof d === "object" ? d.pointsSum ?? d.points ?? d.total ?? short(d, 80) : d;
