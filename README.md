@@ -1,5 +1,8 @@
 ## 免费AI中转站
 
+https://kktoken.cc/sign-up?aff=lMQ6
+
+
 https://free.supxh.xin/register?code=BVDU5Y
 
 
