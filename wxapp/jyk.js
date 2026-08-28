@@ -16,8 +16,9 @@ wx_auth        必填，wx_server 鉴权值
 登录  POST /api/index/get_openid {code, pid:"", device_info:"android_MEIZU_22_370"}
         -> errno==0，data.access_token；头 Authorization: Bearer <token> + X-Payconfig-Id:2
 状态  GET /api/checkin/home -> data.{enabled, today_signed, can_sign}
-签到  ① POST /api/checkin/prepare -> data.ad_token
-      ② POST /api/checkin/sign {ad_token} -> errno==0 成功
+普通签到  ① POST /api/checkin/sign {} -> errno==0 成功
+广告签到  ① POST /api/checkin/ad/prepare -> data.ad_token
+        ② POST /api/checkin/ad/sign {ad_token} -> errno==0 成功
 响应壳：{errno:0, data}；errno!=0 视为失败/未开启。只做普通签到，不做广告签到。
 ------------------------------------------
 */
@@ -43,8 +44,9 @@ const USER_AGENT =
 
 const EP_LOGIN = "/api/index/get_openid";
 const EP_HOME = "/api/checkin/home";
-const EP_PREPARE = "/api/checkin/prepare";
+const EP_PREPARE = "/api/checkin/ad/prepare";
 const EP_SIGN = "/api/checkin/sign";
+const EP_AD_SIGN = "/api/checkin/ad/sign";
 
 const wechat = new WeChatServer({
     url: process.env.wx_server_url || "http://192.168.31.196:8787",
@@ -134,12 +136,8 @@ class Task {
         if (Number(res?.errno) !== 0) throw new Error(`home失败: ${res?.errmsg || short(res)}`);
         return res.data || {};
     }
-    async prepareAndSign() {
-        const prepared = await this.request("POST", EP_PREPARE);
-        if (Number(prepared?.errno) !== 0) return this.log(`❌ 普通签到 prepare 失败: ${short(prepared)}`);
-        const adToken = String((prepared.data || {}).ad_token || "");
-        if (!adToken) return this.log("❌ 普通签到 prepare 未返回 ad_token");
-        const signed = await this.request("POST", EP_SIGN, { ad_token: adToken });
+    async sign() {
+        const signed = await this.request("POST", EP_SIGN, {});
         if (Number(signed?.errno) === 0) {
             const d = signed.data || {};
             return this.log(`✅ 签到成功${d.score !== undefined ? `，获得 ${d.score} 积分` : ""}${d.integral !== undefined ? `，积分 ${d.integral}` : ""}`);
@@ -147,7 +145,24 @@ class Task {
         if (/已签|签到过|重复|已完成/.test(String(signed?.errmsg || signed?.msg || ""))) return this.log(`✅ 今日已签到（${signed.errmsg || signed.msg}）`);
         this.log(`❌ 签到失败: ${signed?.errmsg || signed?.msg || short(signed)}`);
     }
-    async sign() {
+    async prepareAndSign() {
+        const prepared = await this.request("POST", EP_PREPARE);
+        if (Number(prepared?.errno) !== 0) return this.log(`❌ 普通签到 prepare 失败: ${short(prepared)}`);
+        const adToken = String((prepared.data || {}).ad_token || "");
+        if (!adToken) return this.log("❌ 普通签到 prepare 未返回 ad_token");
+        await $.wait(10 * 1000)
+        const signed = await this.request("POST", EP_AD_SIGN, { ad_token: adToken });
+        if (Number(signed?.errno) === 0) {
+            const d = signed.data || {};
+            this.log(`✅ 广告签到成功${d.score !== undefined ? `，获得 ${d.score} 积分` : ""}${d.integral !== undefined ? `，积分 ${d.integral}` : ""}`);
+            await $.wait(30 * 1000)
+            await checkin_sign('ad');
+            return
+        }
+        if (/已签|签到过|重复|已完成/.test(String(signed?.errmsg || signed?.msg || ""))) return this.log(`✅ 今日已签到（${signed.errmsg || signed.msg}）`);
+        this.log(`❌ 广告签到失败: ${signed?.errmsg || signed?.msg || short(signed)}`);
+    }
+    async checkin_sign(type) {
         let home;
         try {
             home = await this.home();
@@ -158,9 +173,26 @@ class Task {
                 home = await this.home();
             } else throw e;
         }
-        if (!home.enabled) return this.log("普通签到未开启");
-        if (home.today_signed || !home.can_sign) return this.log("✅ 今日已签到或不可签");
-        await this.prepareAndSign();
+        if (type == 'ad') {
+            if (home.ad && home.ad.today_count < home.ad.daily_limit) {
+                await this.prepareAndSign();
+            } else {
+                this.log("✅ 今日广告签到已完成签到或不可签")
+            }
+            
+        } else {
+            if (!home.enabled) return this.log("普通签到未开启");
+            if (home.today_signed || !home.can_sign) {
+                this.log("✅ 今日普通签到已签到或不可签")
+            } else {
+                await this.sign();
+            }
+            if (home.ad && home.ad.today_count < home.ad.daily_limit) {
+                await this.prepareAndSign();
+            } else {
+                this.log("✅ 今日广告签到已完成签到或不可签")
+            }
+        }
     }
     async ensureLogin() {
         const cached = readCache()[this.account.openid] || {};
@@ -171,7 +203,7 @@ class Task {
         if (!this.account.openid) { this.log("跳过：变量值里没有 openid"); return; }
         try {
             await this.ensureLogin();
-            await this.sign();
+            await this.checkin_sign();
         } catch (e) {
             this.log(`执行失败: ${e.message || e}`);
         }
