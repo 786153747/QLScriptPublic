@@ -16,9 +16,8 @@ wx_auth        必填，wx_server 鉴权值
 登录  POST /api/index/get_openid {code, pid:"", device_info:"android_MEIZU_22_370"}
         -> errno==0，data.access_token；头 Authorization: Bearer <token> + X-Payconfig-Id:2
 状态  GET /api/checkin/home -> data.{enabled, today_signed, can_sign}
-普通签到  ① POST /api/checkin/sign {} -> errno==0 成功
-广告签到  ① POST /api/checkin/ad/prepare -> data.ad_token
-        ② POST /api/checkin/ad/sign {ad_token} -> errno==0 成功
+签到  ① POST /api/checkin/prepare -> data.ad_token
+      ② POST /api/checkin/sign {ad_token} -> errno==0 成功
 响应壳：{errno:0, data}；errno!=0 视为失败/未开启。只做普通签到，不做广告签到。
 ------------------------------------------
 */
@@ -147,16 +146,16 @@ class Task {
     }
     async prepareAndSign() {
         const prepared = await this.request("POST", EP_PREPARE);
-        if (Number(prepared?.errno) !== 0) return this.log(`❌ 普通签到 prepare 失败: ${short(prepared)}`);
+        if (Number(prepared?.errno) !== 0) return this.log(`❌ 广告签到 prepare 失败: ${short(prepared)}`);
         const adToken = String((prepared.data || {}).ad_token || "");
-        if (!adToken) return this.log("❌ 普通签到 prepare 未返回 ad_token");
+        if (!adToken) return this.log("❌ 广告签到 prepare 未返回 ad_token");
         await $.wait(10 * 1000)
         const signed = await this.request("POST", EP_AD_SIGN, { ad_token: adToken });
         if (Number(signed?.errno) === 0) {
             const d = signed.data || {};
             this.log(`✅ 广告签到成功${d.score !== undefined ? `，获得 ${d.score} 积分` : ""}${d.integral !== undefined ? `，积分 ${d.integral}` : ""}`);
             await $.wait(30 * 1000)
-            await checkin_sign('ad');
+            await this.checkin_sign('ad');
             return
         }
         if (/已签|签到过|重复|已完成/.test(String(signed?.errmsg || signed?.msg || ""))) return this.log(`✅ 今日已签到（${signed.errmsg || signed.msg}）`);
