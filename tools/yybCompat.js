@@ -11,8 +11,6 @@ const UNSUPPORTED_GETUSERINFO_SCRIPTS = new Set([]);
 const SCRIPT_ACCOUNT_ENV_OVERRIDES = {
     choubao: ["choubaoleyuan"],
     kangshifu: ["ksfcys"],
-    wanyazhenxuan: ["wyzx"],
-    yingshujufeng: ["yingshijufeng"],
     yz9d: ["dks"],
     yz19: ["tuoluzhe"],
 };

@@ -8,7 +8,7 @@ cron: 18 8 * * *
 变量值：wx_server 里的 openid/账号标识，多账号用 & 或换行（可加 #备注，仅取 # 前的 openid）
 依赖变量：wx_server_url、wx_auth
 ------------------------------------------
-接口契约（h5.youzan.com，有赞 SaaS 通用签到，与本仓库 yz19.js / wanyazhenxuan.js 同一套）：
+接口契约（h5.youzan.com，有赞 SaaS 通用签到，与本仓库 yz19.js 同一套）：
   静默登录 POST /wscshop/weapp/authorize.json  {appId, clientBiz:"weapp_wsc", code}
         -> code==0，data.{accessToken|access_token, sessionId, kdtId, nick_name, mobile}
   签到活动 GET  /wscump/checkin/show_checkin_page_v2.json -> {checkinId, isShow}
