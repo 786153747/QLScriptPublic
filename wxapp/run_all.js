@@ -8,6 +8,9 @@
  *      如此循环直到该脚本不再出现空 code/限流为止(默认无限重试)
  *   3. 其他失败(业务失败/超时/异常退出)不重试,直接进入下一个脚本
  *
+ *   4. 判定重试前会先检查输出:若已出现「非空有效 code」(如 "code":"0b..."),
+ *      说明 code 已拿到,后续只是业务层失败——不进入等待重试,直接跳下一个脚本。
+ *
  * 用法(在仓库根目录执行):
  *   node wxapp/run_all.js                     # 全量逐个执行
  *   node wxapp/run_all.js --list              # 仅列出将执行的脚本
@@ -131,6 +134,20 @@ function matchesAnyKeyword(outputText, keywords) {
     return keywords.some((keyword) => lowercased.includes(keyword.toLowerCase()));
 }
 
+// 输出中是否已出现「非空有效 code」——微信 code 通常是 20+ 字符的随机串,
+// 这里按 8 字符以上判定,避免把 "code":"0" 之类的业务占位值误判成"已拿到 code"。
+function hasValidWxCode(outputText) {
+    return /"code"\s*:\s*"[^"]{8}[^"]*"/i.test(String(outputText || ""));
+}
+
+// 是否应因「空 code / 限流」而等待重试:
+// 只有输出中确实没有拿到有效 code 时才重试;
+// 若 code 已拿到,说明 wx_server 侧正常,后续只是业务层失败——不进入等待重试。
+function shouldRetryForEmptyCodeOrRateLimit(outputText) {
+    if (hasValidWxCode(outputText)) return false;
+    return matchesAnyKeyword(outputText, EMPTY_CODE_OR_RATE_LIMIT_KEYWORDS);
+}
+
 function tail(text, lines = 8) {
     const trimmed = String(text || "").replace(/\s+$/u, "");
     if (!trimmed) return "";
@@ -175,8 +192,7 @@ function executeScript(fileName, config, yybServer) {
     else if (matchesAnyKeyword(combinedOutput, FAILURE_KEYWORDS)) status = "失败";
     else status = "成功";
 
-    // 超时/异常退出时输出可能不完整,仍参与关键词检测(如限流导致的挂起)
-    const emptyCodeOrRateLimited = matchesAnyKeyword(combinedOutput, EMPTY_CODE_OR_RATE_LIMIT_KEYWORDS);
+    const emptyCodeOrRateLimited = shouldRetryForEmptyCodeOrRateLimit(combinedOutput);
 
     return { status, exitCode, elapsedSec, output: combinedOutput, emptyCodeOrRateLimited };
 }

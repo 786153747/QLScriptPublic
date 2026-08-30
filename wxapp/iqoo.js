@@ -217,9 +217,14 @@ class Task {
             headers: { auth: process.env.wx_auth },
             timeout: 45000,
         });
-        const result = data?.data || {};
-        if (!data?.status || !result.code || !result.encryptedData || !result.iv) {
+        const result = { ...(data?.data || {}), code: (data?.data?.code || data?.code || "") };
+        if (!data?.status || (!result.code && !data?.code)) {
             throw new Error(`wx_server 未返回完整登录数据: ${JSON.stringify(data)}`);
+        }
+        // 微信加密资料字段(encryptedData/iv)可能为空:此类账号未授权头像昵称等用户资料,
+        // 属兼容场景——仍携带 code 尝试仅 code 登录,缺字段只提示不中断。
+        if (!result.iv || !result.encryptedData) {
+            $.log(`账号[${this.index}] 登录数据缺少加密资料字段(encryptedData/iv)，改用仅 code 兼容登录`);
         }
         return result;
     }
