@@ -11,6 +11,7 @@ cron: 0,30 * * * *    (每 30 分钟一次)
   正常取到 code      -> 只记录日志,不打扰
   取 code 为空       -> 等待 10s 复探一次,复现才推送告警(排除间歇性抖动)
   账号登录态过期     -> 推送告警(409 login_buffer expired,需控制台重新扫码)
+  接口限流(429)     -> 推送提醒(即使复探已恢复也提醒,便于发现取码频率过高)
   服务不可用/网络错误 -> 等待 10s 复探一次,复现才推送告警
 
 消息推送走 tools/sendNotify.js,与签到脚本同一套通知渠道
@@ -61,6 +62,10 @@ function judgeProbeOutcome(httpStatus, payload) {
     if (httpStatus === 409 || Number(body.code) === 409 || message.includes("login_buffer expired")) {
         return { ok: false, reason: `账号登录态过期(409 login_buffer expired): ${message || "re-scan required"},需到 YYB 控制台重新扫码` };
     }
+    // 限流单独识别(HTTP 429 或 body.code 429),标记 rateLimited 供主流程决定是否推送
+    if (httpStatus === 429 || Number(body.code) === 429 || message.toLowerCase().includes("too many request")) {
+        return { ok: false, rateLimited: true, reason: `接口限流(HTTP 429,取码过于频繁): ${message || "too many requests"} ${summarizePayload(body)}` };
+    }
     if (httpStatus !== 200) {
         return { ok: false, reason: `服务不可用(HTTP ${httpStatus}): ${summarizePayload(body)}` };
     }
@@ -109,8 +114,19 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, CONFIRM_REPROBE_DELAY_MS));
 
     const confirmOutcome = await probeOnce(baseUrl, ref, appId);
-    if (confirmOutcome.ok) {
+    if (confirmOutcome.ok && !firstOutcome.rateLimited) {
         console.log(`✅ [${nowText()}] 复探已恢复,首次为瞬时抖动,不推送`);
+        process.exit(0);
+    }
+    if (confirmOutcome.ok && firstOutcome.rateLimited) {
+        // 429 限流即使复探恢复也提醒:说明取码频率已触及限流阈值,run_all 等脚本可能正被限流
+        console.log(`✅ [${nowText()}] 复探已恢复,但首次探测为 429 限流,仍推送提醒`);
+        $.log(`⚠️ YYB 取码限流提醒(已恢复) ${nowText()}`);
+        $.log(`接口: ${baseUrl}${GET_CODE_ENDPOINT}(app_id=${appId}, ref=${ref})`);
+        $.log(`首次探测: ${firstOutcome.reason}`);
+        $.log(`复探确认: 已恢复正常取码`);
+        $.log("排查建议: ① 取码请求频率是否过高(检查 run_all 并发/任务间隔);② YYB 服务端与微信侧限流阈值;③ 频繁出现请降低取码频率或拉长探测间隔");
+        await $.sendMsg();
         process.exit(0);
     }
 
@@ -118,7 +134,7 @@ async function main() {
     $.log(`接口: ${baseUrl}${GET_CODE_ENDPOINT}(app_id=${appId}, ref=${ref})`);
     $.log(`首次探测: ${firstOutcome.reason}`);
     $.log(`复探确认: ${confirmOutcome.reason}`);
-    $.log("排查建议: ① YYB 服务是否存活;② 微信账号登录态是否过期(控制台重新扫码);③ PROBE_APP_ID 对应小程序是否仍在微信中授权");
+    $.log("排查建议: ① YYB 服务是否存活;② 微信账号登录态是否过期(控制台重新扫码);③ PROBE_APP_ID 对应小程序是否仍在微信中授权;④ 若为 429 限流持续,请降低取码频率(检查 run_all 并发/任务间隔)");
     await $.sendMsg();
     process.exit(0);
 }

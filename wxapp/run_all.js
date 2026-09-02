@@ -5,7 +5,7 @@
  *   1. 按文件名顺序逐个执行 wxapp/ 下的 .js / .py 签到脚本(一次只跑一个)
  *   2. 脚本执行完后,若输出中检测到「取 code 为空 / 限流 / 429」,
  *      等待 5 分钟后重试该脚本;重试后仍是空 code/限流,则再等 5 分钟继续重试,
- *      如此循环直到该脚本不再出现空 code/限流为止(默认无限重试)
+ *      默认最多重试 50 次,达到上限后跳过进入下一个脚本
  *   3. 其他失败(业务失败/超时/异常退出)不重试,直接进入下一个脚本
  *
  *   4. 判定重试前会先检查输出:若已出现「非空有效 code」(如 "code":"0b..."),
@@ -21,12 +21,12 @@
  *   --retry-wait=300      触发空 code/限流后的等待秒数,默认 300(即 5 分钟)
  *   --step-delay=5        相邻两个脚本之间的间隔秒数,默认 5
  *   --timeout=180000      单个脚本执行超时毫秒,默认 180000
- *   --max-retries=0       空 code/限流最大重试次数,默认 0 = 无限重试
+ *   --max-retries=50      空 code/限流最大重试次数,默认 50;设为 0 = 无限重试
  *   YYB_SERVER            服务端配置,默认 http://3.112.226.233:8000@1
  *
- * ⚠️ 注意: 小程序未授权导致的空 code 是永久性的(重试多久都不会恢复),
- *    默认无限重试会让队列卡死在这类脚本上。如需跳过请设置上限,例如:
- *      RUNALL_MAX_RETRIES=3 node wxapp/run_all.js   (每个脚本最多重试 3 次)
+ * ⚠️ 注意: 小程序未授权/接口不匹配导致的空 code 是永久性的(重试多久都不会恢复),
+ *    默认最多重试 50 次后跳过该脚本。如需无限重试可显式设 0,但会让队列卡死在这类脚本上:
+ *      RUNALL_MAX_RETRIES=0 node wxapp/run_all.js   (每个脚本无限重试直到成功)
  *
  * 输出:
  *   控制台实时摘要 + wxapp/_run/logs/<脚本名>.log 每脚本完整日志(重试时追加)
@@ -40,11 +40,14 @@ const LOGS_DIR = path.join(WXAPP_DIR, "_run", "logs");
 const DEFAULT_YYB_SERVER = "http://3.112.226.233:8000@1";
 
 // 辅助文件/非业务脚本,不参与执行
+// qqpcmgr.js: 其依赖的 /wx/qrcodeauth 接口与 YYB-Go-Enhanced 服务端语义不匹配
+// (服务端只生成待人工扫码的会话,不会返回 authCode),重试永远不会成功,暂时排除
 const HELPER_FILES = new Set([
     "wcs.js",
     "yyb_helper.py",
     "run_all.js",
     "probe_wxcode.js",
+    "qqpcmgr.js",
 ]);
 
 const INTERPRETER_BY_EXT = {
@@ -92,7 +95,7 @@ function parseArgs() {
         retryWaitSec: parseInt(process.env.RUNALL_RETRY_WAIT_SEC || "300", 10),
         stepDelaySec: parseInt(process.env.RUNALL_STEP_DELAY_SEC || "5", 10),
         timeoutMs: parseInt(process.env.RUNALL_TIMEOUT_MS || "180000", 10),
-        maxRetries: parseInt(process.env.RUNALL_MAX_RETRIES || "0", 10),
+        maxRetries: parseInt(process.env.RUNALL_MAX_RETRIES || "50", 10),
     };
     for (const rawArg of process.argv.slice(2)) {
         if (rawArg === "--list") args.list = true;
