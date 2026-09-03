@@ -11,6 +11,8 @@ cron: 0,30 * * * *    (每 30 分钟一次)
   正常取到 code      -> 只记录日志,不打扰
   取 code 为空       -> 等待 10s 复探一次,复现才推送告警(排除间歇性抖动)
   账号登录态过期     -> 推送告警(409 login_buffer expired,需控制台重新扫码)
+                       通知格式对齐业务脚本(wcs.js + roki.js 等)的登录失败日志,便于与签到脚本告警对照:
+                       账号[1] 登录失败: wx_server 未返回 code: {"status":false,"message":"Request failed with status code 409"}
   接口限流(429)     -> 推送提醒(即使复探已恢复也提醒,便于发现取码频率过高)
   服务不可用/网络错误 -> 等待 10s 复探一次,复现才推送告警
 
@@ -55,12 +57,22 @@ function summarizePayload(payload) {
 }
 
 // 判定单次探测结果 -> { ok, reason }
-function judgeProbeOutcome(httpStatus, payload) {
+function judgeProbeOutcome(httpStatus, payload, ref) {
     const body = payload || {};
     const message = String(body.msg || body.message || body.error || "");
-    // 登录态过期在 YYB 上是 HTTP 409 + body.code 409,优先识别并给出准确处置建议
-    if (httpStatus === 409 || Number(body.code) === 409 || message.includes("login_buffer expired")) {
-        return { ok: false, reason: `账号登录态过期(409 login_buffer expired): ${message || "re-scan required"},需到 YYB 控制台重新扫码` };
+    // 登录态过期在 YYB 上是 HTTP 409 + body.code 409(login_buffer expired),
+    // 部分场景下服务端也会以 HTTP 200 + {"status":false,"message":"Request failed with status code 409"} 透传该错误,
+    // 通知格式对齐业务脚本(wcs.js + roki.js 等)的登录失败日志,便于与签到脚本告警对照归并
+    if (httpStatus === 409 || Number(body.code) === 409 || message.includes("login_buffer expired") || /status code 409/i.test(message)) {
+        // wcs.js 对 HTTP 层错误(409)只能拿到 axios 的 "Request failed with status code 409",
+        // 对业务层错误(code 409)则透传服务端 msg,按同样规则归一化保证与业务脚本通知一致
+        const loginFailureMessage = httpStatus === 409 || !message ? "Request failed with status code 409" : message;
+        const droppedServerDetail = loginFailureMessage !== message && message ? `服务端原始响应: ${summarizePayload(body)};` : "";
+        const loginFailureBody = JSON.stringify({ status: false, message: loginFailureMessage });
+        return {
+            ok: false,
+            reason: `账号[${ref}] 登录失败: wx_server 未返回 code: ${loginFailureBody}(${droppedServerDetail}需到 YYB 控制台重新扫码)`,
+        };
     }
     // 限流单独识别(HTTP 429 或 body.code 429),标记 rateLimited 供主流程决定是否推送
     if (httpStatus === 429 || Number(body.code) === 429 || message.toLowerCase().includes("too many request")) {
@@ -87,7 +99,7 @@ async function probeOnce(baseUrl, ref, appId) {
             { ref, app_id: appId },
             { timeout: 30 * 1000, proxy: false, validateStatus: () => true }
         );
-        return judgeProbeOutcome(response.status, response.data);
+        return judgeProbeOutcome(response.status, response.data, ref);
     } catch (error) {
         return { ok: false, reason: `请求失败: ${error.code || error.message}` };
     }
