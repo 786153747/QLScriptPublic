@@ -40,14 +40,11 @@ const LOGS_DIR = path.join(WXAPP_DIR, "_run", "logs");
 const DEFAULT_YYB_SERVER = "http://3.112.226.233:8000@1";
 
 // 辅助文件/非业务脚本,不参与执行
-// qqpcmgr.js: 其依赖的 /wx/qrcodeauth 接口与 YYB-Go-Enhanced 服务端语义不匹配
-// (服务端只生成待人工扫码的会话,不会返回 authCode),重试永远不会成功,暂时排除
 const HELPER_FILES = new Set([
     "wcs.js",
     "yyb_helper.py",
     "run_all.js",
     "probe_wxcode.js",
-    "qqpcmgr.js",
 ]);
 
 const INTERPRETER_BY_EXT = {
