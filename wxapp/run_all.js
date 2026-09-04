@@ -75,13 +75,21 @@ const FAILURE_KEYWORDS = [
     "执行失败",
     "运行失败",
     "获取失败",
+    "登录失败",
+    "签到失败",
+    "完成确认返回: code=5",
+    "token失效",
+    "token无效",
+    "accessToken is illegal",
+    "need_login",
+    "未找到CK",
     "未配置",
-    "错误",
     "exception",
     "traceback",
     "error",
     "failed",
     "❌",
+    "⛔",
 ];
 
 function parseArgs() {
